@@ -1,0 +1,976 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XD</title>
+</head>
+<body>
+    <h1>bat</h1>
+    <p>@echo off
+setlocal EnableDelayedExpansion
+title Control Parental
+color 0B
+
+:: ─── Detectar arquitectura ──────────────────────────────────────────────────
+if /i "%PROCESSOR_ARCHITECTURE%"=="AMD64" (
+    set "ARCH=amd64"
+) else if /i "%PROCESSOR_ARCHITEW6432%"=="AMD64" (
+    set "ARCH=amd64"
+) else (
+    set "ARCH=win32"
+)
+
+:: ─── Rutas ──────────────────────────────────────────────────────────────────
+set "DIR=%~dp0"
+set "PYDIR=%DIR%_runtime\python"
+set "PYEXE=%PYDIR%\python.exe"
+set "SCRIPT=%DIR%lock_screen.py"
+
+:: ─── ¿Ya tenemos Python embebido? ────────────────────────────────────────────
+if exist "%PYEXE%" goto :run
+
+:: ─── Descargar Python embebido ───────────────────────────────────────────────
+echo.
+echo  ╔══════════════════════════════════════════════════╗
+echo  ║   Control Parental  -  Primera configuracion     ║
+echo  ║   Descargando Python (solo ocurre una vez)...    ║
+echo  ╚══════════════════════════════════════════════════╝
+echo.
+
+:: Versión y URL
+set "PY_VER=3.12.7"
+if "%ARCH%"=="amd64" (
+    set "PY_URL=https://www.python.org/ftp/python/%PY_VER%/python-%PY_VER%-embed-amd64.zip"
+) else (
+    set "PY_URL=https://www.python.org/ftp/python/%PY_VER%/python-%PY_VER%-embed-win32.zip"
+)
+
+set "ZIPFILE=%TEMP%\py_embed.zip"
+
+echo  Descargando Python %PY_VER% (%ARCH%)...
+powershell -NoProfile -Command ^
+    "try { ^
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ^
+        $wc = New-Object Net.WebClient; ^
+        $wc.DownloadFile('%PY_URL%', '%ZIPFILE%'); ^
+        Write-Host '  OK' ^
+    } catch { Write-Host '  ERROR: ' $_.Exception.Message; exit 1 }"
+
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo  [ERROR] No se pudo descargar Python.
+    echo  Comprueba tu conexion a Internet e intenta de nuevo.
+    pause & exit /b 1
+)
+
+echo  Extrayendo...
+if not exist "%PYDIR%" mkdir "%PYDIR%"
+
+powershell -NoProfile -Command ^
+    "Expand-Archive -Path '%ZIPFILE%' -DestinationPath '%PYDIR%' -Force"
+
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo  [ERROR] No se pudo extraer el archivo.
+    pause & exit /b 1
+)
+
+:: Activar biblioteca estándar en el .pth del embebido
+:: (descomenta "import site" para que tkinter funcione correctamente)
+for %%f in ("%PYDIR%\python3*._pth") do (
+    powershell -NoProfile -Command ^
+        "(Get-Content '%%f') -replace '#import site','import site' | Set-Content '%%f'"
+)
+
+del "%ZIPFILE%" >nul 2>&1
+
+echo  Listo. Python descargado correctamente.
+echo.
+
+:run
+:: ─── Verificar que el script existe ─────────────────────────────────────────
+if not exist "%SCRIPT%" (
+    echo  [ERROR] No se encontro lock_screen.py en la misma carpeta.
+    pause & exit /b 1
+)
+
+:: ─── Ejecutar con ventana oculta (sin consola visible) ───────────────────────
+start "" /b "%PYEXE%" "%SCRIPT%"
+exit /b 0</p>
+      <title>look scren</title>
+      """
+Control Parental - Pantalla de Descanso  v2.0
+=============================================
+Compatible: Windows 10 / 11  (64-bit)
+Dependencias: NINGUNA  (solo biblioteca estándar de Python)
+
+Para personalizar edita config.ini
+"""
+
+import tkinter as tk
+import configparser
+import math
+import ctypes
+import ctypes.wintypes as wintypes
+import os
+import sys
+import random
+import threading
+import time
+
+# ─── LEER CONFIG ─────────────────────────────────────────────────────────────
+
+def load_config():
+    cfg = configparser.ConfigParser()
+    cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.ini")
+    cfg.read(cfg_path, encoding="utf-8")
+    s = cfg["ajustes"] if "ajustes" in cfg else {}
+    return {
+        "code":         s.get("codigo", "1234"),
+        "minutes":      float(s.get("minutos", "30")),
+        "title":        s.get("titulo", "Hora de descansar 🌙"),
+        "subtitle":     s.get("subtitulo", "Aleja los ojos, estira el cuerpo y respira."),
+        "max_attempts": int(s.get("intentos_maximos", "3")),
+        "lockout_secs": int(s.get("segundos_bloqueo", "60")),
+    }
+
+CFG = load_config()
+TOTAL_SECS = max(1, int(CFG["minutes"] * 60))
+
+# ─── PALETA ───────────────────────────────────────────────────────────────────
+
+BG        = "#07101f"
+PANEL     = "#0c1a32"
+ACCENT    = "#4facfe"
+ACCENT2   = "#00e5ff"
+WHITE     = "#ddf0ff"
+DIM       = "#2a4a6a"
+SUB       = "#5a8fb0"
+ERR       = "#ff6060"
+GREEN     = "#00e676"
+KEY_BG    = "#0e1e36"
+KEY_HOV   = "#162840"
+KEY_BDR   = "#1a3356"
+
+TIPS = [
+    "☕  Toma agua o un té caliente.",
+    "👀  Mira algo a lo lejos — relaja los ojos.",
+    "🧘  Respira profundo: 4 seg. in, 4 seg. out.",
+    "🚶  Camina un par de minutos.",
+    "💪  Estira cuello, hombros y muñecas.",
+    "🪟  Asómate a una ventana, date aire.",
+    "🎵  Cierra los ojos y escucha música.",
+    "📖  Lee unas páginas de un libro físico.",
+]
+
+# ─── WINDOWS API (ctypes) ─────────────────────────────────────────────────────
+
+user32   = ctypes.WinDLL("user32",   use_last_error=True)
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+WH_KEYBOARD_LL   = 13
+HC_ACTION        = 0
+WM_KEYDOWN       = 0x0100
+WM_SYSKEYDOWN    = 0x0104
+LLKHF_ALTDOWN    = 0x20
+SWP_NOMOVE       = 0x0002
+SWP_NOSIZE       = 0x0001
+HWND_TOPMOST     = -1
+
+VK_TAB   = 0x09
+VK_ESC   = 0x1B
+VK_LWIN  = 0x5B
+VK_RWIN  = 0x5C
+VK_F4    = 0x73
+VK_DEL   = 0x2E
+VK_F1    = 0x70   # bloquear F1-F12 menos útil pero ayuda
+
+_HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_int,
+                                wintypes.WPARAM, wintypes.LPARAM)
+
+
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("vkCode",      wintypes.DWORD),
+        ("scanCode",    wintypes.DWORD),
+        ("flags",       wintypes.DWORD),
+        ("time",        wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+    ]
+
+
+_hook_handle = None
+_hook_ref    = None   # evita que el GC elimine el callback
+_blocking    = True
+
+
+def _hook_callback(nCode, wParam, lParam):
+    if _blocking and nCode == HC_ACTION:
+        info = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+        vk   = info.vkCode
+        alt  = bool(info.flags & LLKHF_ALTDOWN)
+        if vk in (VK_LWIN, VK_RWIN, VK_ESC):
+            return 1
+        if alt and vk in (VK_TAB, VK_F4, VK_ESC):
+            return 1
+    return user32.CallNextHookEx(_hook_handle, nCode, wParam, lParam)
+
+
+def install_hook():
+    global _hook_handle, _hook_ref
+    _hook_ref    = _HOOKPROC(_hook_callback)
+    _hook_handle = user32.SetWindowsHookExW(
+        WH_KEYBOARD_LL, _hook_ref,
+        kernel32.GetModuleHandleW(None), 0
+    )
+
+
+def uninstall_hook():
+    global _blocking
+    _blocking = False
+    if _hook_handle:
+        user32.UnhookWindowsHookEx(_hook_handle)
+
+
+def set_topmost(hwnd):
+    user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE)
+
+
+def pump_messages(root):
+    """Bombea mensajes de Windows para que el hook de teclado funcione."""
+    msg = wintypes.MSG()
+    while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):
+        user32.TranslateMessage(ctypes.byref(msg))
+        user32.DispatchMessageW(ctypes.byref(msg))
+    root.after(8, lambda: pump_messages(root))
+
+
+def beep(freq=880, ms=200):
+    try:
+        import winsound
+        winsound.Beep(freq, ms)
+    except Exception:
+        pass
+
+
+# ─── APLICACIÓN PRINCIPAL ────────────────────────────────────────────────────
+
+class LockScreen:
+
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("Descanso")
+
+        self._secs_left    = TOTAL_SECS
+        self._pin          = ""
+        self._view         = "main"      # "main" | "pin" | "done"
+        self._attempts     = 0
+        self._locked_out   = False
+        self._lockout_left = 0
+        self._tip_index    = random.randint(0, len(TIPS) - 1)
+
+        # Partículas
+        self._particles: list[dict] = []
+        self._frame = 0
+
+        self._setup_window()
+        self._setup_canvas()
+        install_hook()
+        pump_messages(self.root)
+
+        self._draw()
+        self._tick_timer()
+        self._tick_anim()
+        self._rotate_tips()
+        self._keep_top()
+
+        # hwnd después del primer render
+        self.root.after(150, self._grab_hwnd)
+
+    # ── Ventana ──────────────────────────────────────────────────────────────
+
+    def _setup_window(self):
+        r = self.root
+        sw = r.winfo_screenwidth()
+        sh = r.winfo_screenheight()
+        r.geometry(f"{sw}x{sh}+0+0")
+        r.configure(bg=BG)
+        r.attributes("-fullscreen", True)
+        r.attributes("-topmost", True)
+        r.overrideredirect(True)
+        r.focus_force()
+        # Bloquear cierre desde tkinter
+        r.protocol("WM_DELETE_WINDOW", lambda: None)
+        for seq in ("<Alt-F4>","<Control-w>","<Control-q>","<Escape>"):
+            r.bind(seq, lambda e: "break")
+
+    def _grab_hwnd(self):
+        try:
+            hwnd = user32.FindWindowW(None, "Descanso")
+            if hwnd:
+                set_topmost(hwnd)
+        except Exception:
+            pass
+
+    def _setup_canvas(self):
+        w = self.root.winfo_screenwidth()
+        h = self.root.winfo_screenheight()
+        self.W, self.H = w, h
+        self.cx, self.cy = w // 2, h // 2
+        self.canvas = tk.Canvas(self.root, bg=BG, highlightthickness=0,
+                                width=w, height=h)
+        self.canvas.pack(fill="both", expand=True)
+        self._init_particles()
+
+    # ── Partículas ───────────────────────────────────────────────────────────
+
+    def _init_particles(self):
+        self._particles = []
+        for _ in range(55):
+            self._particles.append({
+                "x":  random.uniform(0, self.W),
+                "y":  random.uniform(0, self.H),
+                "r":  random.uniform(1.2, 3.8),
+                "vx": random.uniform(-0.15, 0.15),
+                "vy": random.uniform(-0.35, -0.05),
+                "phase": random.uniform(0, math.pi * 2),
+                "id": None,
+            })
+
+    def _update_particles(self):
+        f = self._frame * 0.04
+        for p in self._particles:
+            p["x"] += p["vx"]
+            p["y"] += p["vy"]
+            if p["y"] < -8:
+                p["y"] = self.H + 4
+                p["x"] = random.uniform(0, self.W)
+            if p["x"] < -8:  p["x"] = self.W
+            if p["x"] > self.W + 8: p["x"] = 0
+            alpha = 0.25 + 0.65 * abs(math.sin(f + p["phase"]))
+            v = int(30 + 190 * alpha)
+            g = int(100 + 100 * alpha)
+            color = f"#{v:02x}{g:02x}ff"
+            r = p["r"]
+            if p["id"] is None:
+                p["id"] = self.canvas.create_oval(
+                    p["x"]-r, p["y"]-r, p["x"]+r, p["y"]+r,
+                    fill=color, outline="")
+            else:
+                self.canvas.coords(p["id"],
+                    p["x"]-r, p["y"]-r, p["x"]+r, p["y"]+r)
+                self.canvas.itemconfig(p["id"], fill=color)
+
+    # ── Loop principal de animación ───────────────────────────────────────────
+
+    def _tick_anim(self):
+        self._frame += 1
+        self._update_particles()
+        if self._view == "main":
+            self._animate_main()
+        self.root.after(30, self._tick_anim)
+
+    def _animate_main(self):
+        f = self._frame
+        # Glow oscilante del arco
+        glow = 0.5 + 0.5 * math.sin(f * 0.05)
+        v = int(80 + 60 * glow)
+        g_v = int(180 + 40 * glow)
+        glow_col = f"#{v:02x}{g_v:02x}ff"
+        if hasattr(self, "_arc_glow"):
+            self.canvas.itemconfig(self._arc_glow, outline=glow_col)
+
+        # Luna flotando
+        dy = 5 * math.sin(f * 0.04)
+        if hasattr(self, "_moon_id"):
+            self.canvas.coords(self._moon_id, self.cx, self._moon_base_y + dy)
+
+        # Pulsar borde exterior del círculo
+        pulse = 0.5 + 0.5 * math.sin(f * 0.05)
+        R = self._arc_R
+        expand = int(8 * pulse)
+        if hasattr(self, "_pulse_ring"):
+            bx = self.cx - R - expand
+            by = self._arc_cy - R - expand
+            self.canvas.coords(self._pulse_ring,
+                bx, by, self.cx + R + expand, self._arc_cy + R + expand)
+            alpha_v = int(15 + 20 * pulse)
+            self.canvas.itemconfig(self._pulse_ring,
+                outline=f"#{alpha_v:02x}{alpha_v*2:02x}{80+alpha_v:02x}")
+
+        # Actualizar arco de progreso
+        if hasattr(self, "_arc_prog"):
+            progress = 1 - self._secs_left / TOTAL_SECS
+            extent   = -progress * 359.9
+            t = progress
+            r_v = int(79  + (0   - 79)  * t)
+            g_v = int(172 + (229 - 172) * t)
+            b_v = int(254)
+            arc_col = f"#{r_v:02x}{g_v:02x}{b_v:02x}"
+            self.canvas.itemconfig(self._arc_prog, extent=extent, outline=arc_col)
+
+        if hasattr(self, "_time_id"):
+            self.canvas.itemconfig(self._time_id, text=self._fmt())
+
+    # ── Temporizador ─────────────────────────────────────────────────────────
+
+    def _tick_timer(self):
+        if self._view == "done":
+            return
+        if self._locked_out:
+            self._lockout_left = max(0, self._lockout_left - 1)
+            if self._lockout_left <= 0:
+                self._locked_out = False
+                self._attempts   = 0
+                if hasattr(self, "_lock_msg"):
+                    self.canvas.itemconfig(self._lock_msg, text="")
+                if hasattr(self, "_err_id"):
+                    self.canvas.itemconfig(self._err_id, text="")
+        if self._secs_left > 0:
+            self._secs_left -= 1
+        elif self._view == "main":
+            self._do_unlock(by_timer=True)
+            return
+        self.root.after(1000, self._tick_timer)
+
+    def _fmt(self):
+        s = self._secs_left
+        return f"{s // 60:02d}:{s % 60:02d}"
+
+    # ── Dibujo ───────────────────────────────────────────────────────────────
+
+    def _draw(self):
+        self.canvas.delete("ui")
+        if self._view == "main":
+            self._draw_main()
+        elif self._view == "pin":
+            self._draw_pin()
+        elif self._view == "done":
+            self._draw_done()
+
+    def _clear_ui(self):
+        self.canvas.delete("ui")
+
+    # ── Vista: Principal ─────────────────────────────────────────────────────
+
+    def _draw_main(self):
+        cx, cy = self.cx, self.cy
+        R = min(self.W, self.H) // 7        # radio del círculo
+        arc_cy = cy - self.H // 13
+        self._arc_R  = R
+        self._arc_cy = arc_cy
+        THICK = max(10, R // 9)
+        box   = (cx-R, arc_cy-R, cx+R, arc_cy+R)
+        prog  = 1 - self._secs_left / TOTAL_SECS
+
+        # Aro exterior (pulso)
+        self._pulse_ring = self.canvas.create_oval(
+            cx-R-4, arc_cy-R-4, cx+R+4, arc_cy+R+4,
+            outline=DIM, width=2, fill="", tags="ui")
+
+        # Aro de fondo
+        self.canvas.create_arc(*box, start=90, extent=359.9,
+            style="arc", outline="#112035", width=THICK, tags="ui")
+
+        # Glow (arco más grueso, suave)
+        self._arc_glow = self.canvas.create_arc(*box, start=90,
+            extent=-prog*359.9, style="arc",
+            outline=DIM, width=THICK+8, tags="ui")
+
+        # Arco de progreso
+        t = prog
+        r_v = int(79  + (0   - 79)  * t)
+        g_v = int(172 + (229 - 172) * t)
+        arc_col = f"#{r_v:02x}{g_v:02x}ff"
+        self._arc_prog = self.canvas.create_arc(*box, start=90,
+            extent=-prog*359.9, style="arc",
+            outline=arc_col, width=THICK, tags="ui")
+
+        # Tiempo en el centro
+        font_big   = ("Segoe UI", max(28, R//3), "bold")
+        font_small = ("Segoe UI", max(10, R//9))
+        self.canvas.create_text(cx, arc_cy-8, text="tiempo restante",
+            fill=DIM, font=font_small, anchor="center", tags="ui")
+        self._time_id = self.canvas.create_text(cx, arc_cy+R//5,
+            text=self._fmt(), fill=WHITE,
+            font=font_big, anchor="center", tags="ui")
+
+        # Luna
+        moon_y = arc_cy + R + max(50, self.H//14)
+        self._moon_base_y = moon_y
+        self._moon_id = self.canvas.create_text(cx, moon_y,
+            text="🌙", font=("Segoe UI", max(28, R//3)),
+            fill=WHITE, anchor="center", tags="ui")
+
+        # Título y subtítulo
+        title_y  = arc_cy - R - max(55, self.H//12)
+        sub_y    = title_y + max(38, self.H//20)
+        font_t   = ("Segoe UI", max(18, R//5))
+        font_sub = ("Segoe UI", max(11, R//10))
+        self.canvas.create_text(cx, title_y, text=CFG["title"],
+            fill=WHITE, font=font_t, anchor="center", tags="ui")
+        self.canvas.create_text(cx, sub_y, text=CFG["subtitle"],
+            fill=SUB, font=font_sub, anchor="center", tags="ui")
+
+        # Tip rotativo
+        tip_y = self.H - max(70, self.H//9)
+        self._tip_id = self.canvas.create_text(cx, tip_y,
+            text=TIPS[self._tip_index],
+            fill=DIM, font=("Segoe UI", max(11, R//10)),
+            anchor="center", tags="ui")
+
+        # Botón código
+        btn_y  = moon_y + max(50, self.H//14)
+        btn_w, btn_h = max(180, R*2), max(40, R//3)
+        self._make_button(cx, btn_y, btn_w, btn_h,
+                          "🔑  Ingresar código",
+                          lambda: self._switch("pin"))
+
+    # ── Vista: PIN ───────────────────────────────────────────────────────────
+
+    def _draw_pin(self):
+        cx, cy = self.cx, self.cy
+        R = min(self.W, self.H) // 7
+
+        # Encabezado
+        self.canvas.create_text(cx, cy - self.H//3,
+            text="🔒  Ingresa el código",
+            fill=WHITE, font=("Segoe UI", max(18, R//4), "bold"),
+            anchor="center", tags="ui")
+        self.canvas.create_text(cx, cy - self.H//3 + max(36, R//4),
+            text=f"Código de {len(CFG['code'])} dígitos",
+            fill=DIM, font=("Segoe UI", max(10, R//10)),
+            anchor="center", tags="ui")
+
+        # Puntos
+        self._dot_ids = []
+        spacing = max(26, R//4)
+        n = len(CFG["code"])
+        total_w = (n - 1) * spacing
+        dot_y = cy - self.H//5
+        for i in range(n):
+            x = cx - total_w // 2 + i * spacing
+            filled = i < len(self._pin)
+            dot = self.canvas.create_oval(
+                x-11, dot_y-11, x+11, dot_y+11,
+                fill=ACCENT if filled else PANEL,
+                outline=ACCENT if filled else KEY_BDR,
+                width=2, tags="ui")
+            self._dot_ids.append((dot, x, dot_y))
+
+        # Mensajes de error / bloqueo
+        self._err_id = self.canvas.create_text(cx, dot_y + 30,
+            text="", fill=ERR,
+            font=("Segoe UI", max(10, R//10)), anchor="center", tags="ui")
+        self._lock_msg = self.canvas.create_text(cx, dot_y + 48,
+            text="", fill=ERR,
+            font=("Segoe UI", max(9, R//11)), anchor="center", tags="ui")
+
+        # Intentos restantes
+        self._att_id = self.canvas.create_text(cx, dot_y + 66,
+            text=self._att_text(),
+            fill=DIM, font=("Segoe UI", max(9, R//11)),
+            anchor="center", tags="ui")
+
+        if self._locked_out:
+            self.canvas.itemconfig(self._err_id,
+                text=f"🔒 Bloqueado por {self._lockout_left}s — demasiados intentos")
+
+        # Teclado numérico
+        KEY_LABELS = [["1","2","3"],["4","5","6"],["7","8","9"],["","0","⌫"]]
+        ks   = max(70, R * 17 // 20)
+        gap  = max(12, R//8)
+        ky0  = cy - self.H//14
+        kx0  = cx - (3*ks + 2*gap) // 2
+
+        for ri, row in enumerate(KEY_LABELS):
+            for ci, key in enumerate(row):
+                if not key:
+                    continue
+                bx = kx0 + ci * (ks + gap)
+                by = ky0 + ri * (ks + gap)
+                self._key_btn(bx, by, ks, key)
+
+        # Volver
+        self.canvas.create_text(30, 30, text="← Volver",
+            fill=DIM, font=("Segoe UI", 11), anchor="nw", tags="ui")
+        self.canvas.tag_bind("back_btn", "<Button-1>",
+            lambda e: self._switch("main"))
+        back = self.canvas.create_text(30, 30, text="← Volver",
+            fill=SUB, font=("Segoe UI", 11), anchor="nw", tags="ui")
+        self.canvas.tag_bind(back, "<Button-1>",
+            lambda e: (self._reset_pin(), self._switch("main")))
+        self.canvas.tag_bind(back, "<Enter>",
+            lambda e: self.canvas.itemconfig(back, fill=WHITE))
+        self.canvas.tag_bind(back, "<Leave>",
+            lambda e: self.canvas.itemconfig(back, fill=SUB))
+
+        # Teclas físicas
+        self.root.bind("<Key>", self._physical_key)
+
+    def _att_text(self):
+        mx = CFG["max_attempts"]
+        rem = mx - self._attempts
+        if rem <= 0 or self._locked_out:
+            return ""
+        return f"Intentos restantes: {rem}"
+
+    def _key_btn(self, bx, by, ks, key):
+        is_del = key == "⌫"
+        rect = self.canvas.create_rectangle(
+            bx, by, bx+ks, by+ks,
+            fill=KEY_BG, outline=KEY_BDR, width=1,
+            tags="ui")
+        lbl = self.canvas.create_text(
+            bx+ks//2, by+ks//2, text=key,
+            fill=ERR if is_del else WHITE,
+            font=("Segoe UI", max(18, ks//3), "bold"),
+            tags="ui")
+        for item in (rect, lbl):
+            self.canvas.tag_bind(item, "<Button-1>",
+                lambda e, k=key: self._press(k))
+            self.canvas.tag_bind(item, "<Enter>",
+                lambda e, r=rect: self.canvas.itemconfig(r, fill=KEY_HOV))
+            self.canvas.tag_bind(item, "<Leave>",
+                lambda e, r=rect: self.canvas.itemconfig(r, fill=KEY_BG))
+            self.canvas.tag_bind(item, "<ButtonPress-1>",
+                lambda e, r=rect, l=lbl: (
+                    self.canvas.itemconfig(r, fill=KEY_BDR),
+                    self.canvas.itemconfig(l, fill=ACCENT)
+                ))
+            self.canvas.tag_bind(item, "<ButtonRelease-1>",
+                lambda e, r=rect, l=lbl, k=key: (
+                    self.canvas.itemconfig(r, fill=KEY_HOV),
+                    self.canvas.itemconfig(l, fill=ERR if k=="⌫" else WHITE)
+                ))
+
+    def _physical_key(self, event):
+        if self._view != "pin":
+            return
+        if event.char in "0123456789":
+            self._press(event.char)
+        elif event.keysym == "BackSpace":
+            self._press("⌫")
+
+    def _press(self, key):
+        if self._locked_out:
+            return
+        if key == "⌫":
+            self._pin = self._pin[:-1]
+        elif len(self._pin) < len(CFG["code"]):
+            self._pin += key
+        self._refresh_dots()
+        if len(self._pin) == len(CFG["code"]):
+            self.root.after(80, self._check_pin)
+
+    def _refresh_dots(self):
+        if not hasattr(self, "_dot_ids"):
+            return
+        for i, (dot, x, dy) in enumerate(self._dot_ids):
+            filled = i < len(self._pin)
+            self.canvas.itemconfig(dot,
+                fill=ACCENT if filled else PANEL,
+                outline=ACCENT if filled else KEY_BDR)
+
+    def _check_pin(self):
+        if self._pin == CFG["code"]:
+            beep(1000, 180)
+            self._do_unlock(by_timer=False)
+        else:
+            self._attempts += 1
+            if self._attempts >= CFG["max_attempts"]:
+                self._locked_out   = True
+                self._lockout_left = CFG["lockout_secs"]
+                self._pin = ""
+                self._refresh_dots()
+                beep(300, 400)
+                if hasattr(self, "_err_id"):
+                    self.canvas.itemconfig(self._err_id,
+                        text=f"🔒 Bloqueado {CFG['lockout_secs']}s — demasiados intentos")
+                if hasattr(self, "_att_id"):
+                    self.canvas.itemconfig(self._att_id, text="")
+            else:
+                beep(300, 200)
+                self._shake_dots()
+                if hasattr(self, "_err_id"):
+                    rem = CFG["max_attempts"] - self._attempts
+                    self.canvas.itemconfig(self._err_id,
+                        text="Código incorrecto ✗")
+                if hasattr(self, "_att_id"):
+                    self.canvas.itemconfig(self._att_id,
+                        text=self._att_text())
+
+    def _shake_dots(self):
+        shifts = [12, -12, 9, -9, 5, -5, 2, -2, 0]
+        base   = [(x, dy) for _, x, dy in self._dot_ids]
+        r      = 11
+
+        def step(i):
+            if i >= len(shifts):
+                self._pin = ""
+                self._refresh_dots()
+                return
+            dx = shifts[i]
+            for j, (dot, bx, by) in enumerate(self._dot_ids):
+                nx = base[j][0] + dx
+                self.canvas.coords(dot, nx-r, by-r, nx+r, by+r)
+            self.root.after(50, lambda: step(i+1))
+
+        step(0)
+
+    def _reset_pin(self):
+        self._pin = ""
+        self.root.unbind("<Key>")
+
+    # ── Vista: Desbloqueado ───────────────────────────────────────────────────
+
+    def _draw_done(self):
+        cx, cy = self.cx, self.cy
+        self.canvas.create_text(cx, cy - 80, text="✅",
+            fill=GREEN, font=("Segoe UI", 64),
+            anchor="center", tags="ui")
+        self.canvas.create_text(cx, cy + 10,
+            text="¡Listo para continuar!",
+            fill=WHITE, font=("Segoe UI", max(22, self.W//60), "bold"),
+            anchor="center", tags="ui")
+        self.canvas.create_text(cx, cy + 55,
+            text="Esperemos que hayas descansado bien 😊",
+            fill=SUB, font=("Segoe UI", max(12, self.W//90)),
+            anchor="center", tags="ui")
+
+        btn_y = cy + 130
+        self._make_button(cx, btn_y, 180, 44, "Cerrar",
+                          lambda: self.root.destroy(),
+                          fill=GREEN, text_fill=BG)
+
+    # ── Helpers UI ───────────────────────────────────────────────────────────
+
+    def _make_button(self, cx, cy, w, h, text, cmd,
+                     fill=PANEL, text_fill=SUB, border=KEY_BDR):
+        bx0, bx1 = cx-w//2, cx+w//2
+        by0, by1 = cy-h//2, cy+h//2
+        rect = self.canvas.create_rectangle(
+            bx0, by0, bx1, by1,
+            fill=fill, outline=border, width=1,
+            tags="ui")
+        lbl = self.canvas.create_text(
+            cx, cy, text=text, fill=text_fill,
+            font=("Segoe UI", max(11, h//3)), anchor="center",
+            tags="ui")
+        for item in (rect, lbl):
+            self.canvas.tag_bind(item, "<Button-1>", lambda e: cmd())
+            self.canvas.tag_bind(item, "<Enter>",
+                lambda e, r=rect, l=lbl: (
+                    self.canvas.itemconfig(r, fill=KEY_HOV),
+                    self.canvas.itemconfig(l, fill=WHITE)))
+            self.canvas.tag_bind(item, "<Leave>",
+                lambda e, r=rect, l=lbl: (
+                    self.canvas.itemconfig(r, fill=fill),
+                    self.canvas.itemconfig(l, fill=text_fill)))
+
+    # ── Cambio de vista ───────────────────────────────────────────────────────
+
+    def _switch(self, view):
+        self._view = view
+        self._clear_ui()
+        if view == "pin":
+            self._draw_pin()
+        elif view == "main":
+            self._draw_main()
+        elif view == "done":
+            self._draw_done()
+
+    # ── Tips rotativos ───────────────────────────────────────────────────────
+
+    def _rotate_tips(self):
+        if self._view == "done":
+            return
+        self._tip_index = (self._tip_index + 1) % len(TIPS)
+        if self._view == "main" and hasattr(self, "_tip_id"):
+            self.canvas.itemconfig(self._tip_id, text=TIPS[self._tip_index])
+        self.root.after(8000, self._rotate_tips)
+
+    # ── Mantener en primer plano ──────────────────────────────────────────────
+
+    def _keep_top(self):
+        if self._view == "done":
+            return
+        self.root.attributes("-topmost", True)
+        self.root.lift()
+        self.root.focus_force()
+        self.root.after(300, self._keep_top)
+
+    # ── Desbloquear ───────────────────────────────────────────────────────────
+
+    def _do_unlock(self, by_timer=False):
+        uninstall_hook()
+        self.root.unbind("<Key>")
+        self.root.attributes("-topmost", False)
+        self.root.overrideredirect(False)
+        if by_timer:
+            beep(880, 180)
+            self.root.after(50, lambda: beep(1100, 200))
+        self._switch("done")
+
+    # ── Arrancar ─────────────────────────────────────────────────────────────
+
+    def run(self):
+        self.root.mainloop()
+
+
+# ─── ENTRADA ─────────────────────────────────────────────────────────────────
+
+def request_admin():
+    """Reinicia el proceso con permisos de administrador si no los tiene."""
+    try:
+        is_admin = ctypes.windll.shell32.IsUserAnAdmin()
+    except Exception:
+        is_admin = False
+    if not is_admin and "--noadmin" not in sys.argv:
+        try:
+            params = " ".join(f'"{a}"' for a in sys.argv) + " --noadmin"
+            ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", sys.executable, params, None, 1)
+            sys.exit(0)
+        except Exception:
+            pass  # Continúa sin admin
+
+
+if __name__ == "__main__":
+    request_admin()
+    LockScreen().run()
+    <h1>config</h1>
+    <p>[ajustes]
+
+# ─── Código de desbloqueo ───────────────────────────────────────────────────
+# Cambia esto por el código que quieras (solo números)
+codigo = 1234
+
+# ─── Tiempo de descanso ──────────────────────────────────────────────────────
+# En minutos. Usa decimales: 0.5 = 30 segundos (para prueba), 30 = 30 min
+minutos = 30
+
+# ─── Mensajes en pantalla ────────────────────────────────────────────────────
+titulo   = Hora de descansar 🌙
+subtitulo = Aleja los ojos, estira el cuerpo y respira.
+
+# ─── Seguridad del PIN ───────────────────────────────────────────────────────
+# Intentos permitidos antes del bloqueo temporal
+intentos_maximos = 3
+
+# Segundos de bloqueo tras agotar los intentos
+segundos_bloqueo = 60</p>
+      <h1> exe.bat</h1>
+      <p>@echo off
+title Compilar a .EXE
+color 0A
+echo.
+echo  ╔════════════════════════════════════════════╗
+echo  ║  Compilar Control Parental a .EXE         ║
+echo  ╚════════════════════════════════════════════╝
+echo.
+
+:: Verificar Python
+python --version >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo  [ERROR] Python no encontrado. Usa iniciar.bat en su lugar.
+    pause & exit /b 1
+)
+
+:: Instalar PyInstaller si no existe
+pip show pyinstaller >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo  Instalando PyInstaller...
+    pip install pyinstaller --quiet
+)
+
+echo  Compilando...
+echo  (Puede tardar 1-2 minutos)
+echo.
+
+pyinstaller ^
+    --onefile ^
+    --noconsole ^
+    --name "ControlParental" ^
+    --icon NONE ^
+    lock_screen.py
+
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo  [ERROR] Fallo la compilacion. Revisa los mensajes de error arriba.
+    pause & exit /b 1
+)
+
+echo.
+echo  ╔════════════════════════════════════════════╗
+echo  ║  Exito: dist\ControlParental.exe creado   ║
+echo  ╚════════════════════════════════════════════╝
+echo.
+echo  Copia ControlParental.exe y config.ini juntos.
+echo  Haz doble clic en ControlParental.exe para usarlo.
+echo.
+pause</p>
+     <h1>LEER</h1>
+     <p><strong>══════════════════════════════════════════════════════
+   CONTROL PARENTAL  v2.0  —  Windows 10 / 11
+══════════════════════════════════════════════════════
+
+▶ USO RÁPIDO (sin instalar nada)
+──────────────────────────────────
+  Doble clic en:  iniciar.bat
+
+  La primera vez descarga Python automáticamente
+  (~25 MB). Las siguientes veces arranca al instante.
+
+
+▶ USO COMO .EXE (si tienes Python instalado)
+──────────────────────────────────────────────
+  Doble clic en:  compilar_exe.bat
+
+  Genera  dist\ControlParental.exe  que puedes
+  distribuir sin necesitar nada más.
+  (Copia config.ini junto al .exe)
+
+
+▶ PERSONALIZAR (sin tocar código)
+──────────────────────────────────
+  Abre  config.ini  con el Bloc de notas:
+
+    codigo           = 1234      ← tu código secreto
+    minutos          = 30        ← tiempo de descanso
+    titulo           = ...       ← texto del título
+    intentos_maximos = 3         ← intentos de PIN
+    segundos_bloqueo = 60        ← bloqueo tras fallos
+
+  Guarda y vuelve a ejecutar.
+
+
+▶ FUNCIONES
+────────────
+  ✔ Pantalla completa, siempre encima
+  ✔ Bloquea Win, Alt+Tab, Alt+F4, Escape
+  ✔ Temporizador circular animado
+  ✔ Teclado numérico para código PIN
+  ✔ Bloqueo temporal tras demasiados intentos
+  ✔ Tips de descanso rotativos
+  ✔ Sonido al desbloquear
+  ✔ Sin dependencias externas
+
+
+▶ ARRANCAR AL INICIO DEL PC
+─────────────────────────────
+  1. Win + R → escribe:  shell:startup  → Enter
+  2. Copia un acceso directo de iniciar.bat ahí
+  3. Se activará automáticamente al encender
+
+
+▶ ¿CÓDIGO OLVIDADO?
+─────────────────────
+  Espera a que el temporizador llegue a 00:00,
+  o edita  config.ini  con otro código.
+
+══════════════════════════════════════════════════════</strong></p>
+</body>
+</html>
